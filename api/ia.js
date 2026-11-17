@@ -1,13 +1,13 @@
 // Função do servidor (Vercel): recebe o texto montado pelo site e chama a IA.
-// Funciona com o Gemini (Google, tem plano gratuito) ou com o Claude (Anthropic, pago por uso).
+// Funciona com a Groq (tem plano gratuito), com o Gemini (Google) ou com o Claude (Anthropic).
 // A chave fica só nas variáveis da Vercel, nunca no navegador.
 const SISTEMA = 'Você responde somente com um objeto JSON válido, sem markdown e sem nenhum texto fora do JSON.';
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ code: 'metodo' });
 
-  const { GEMINI_API_KEY, GEMINI_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, SITE_URL } = process.env;
-  if (!GEMINI_API_KEY && !ANTHROPIC_API_KEY) return res.status(500).json({ code: 'sem_chave' });
+  const { GROQ_API_KEY, GROQ_MODEL, GEMINI_API_KEY, GEMINI_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, SITE_URL } = process.env;
+  if (!GROQ_API_KEY && !GEMINI_API_KEY && !ANTHROPIC_API_KEY) return res.status(500).json({ code: 'sem_chave' });
 
   // 1. Só aceita pedidos vindos do próprio site (se SITE_URL estiver configurado)
   const origem = req.headers.origin || req.headers.referer || '';
@@ -23,9 +23,9 @@ module.exports = async function handler(req, res) {
   // 3. Chama a IA
   let texto = '';
   try {
-    texto = GEMINI_API_KEY
-      ? await chamarGemini(prompt, GEMINI_API_KEY, GEMINI_MODEL)
-      : await chamarClaude(prompt, ANTHROPIC_API_KEY, ANTHROPIC_MODEL);
+    if (GROQ_API_KEY) texto = await chamarGroq(prompt, GROQ_API_KEY, GROQ_MODEL);
+    else if (GEMINI_API_KEY) texto = await chamarGemini(prompt, GEMINI_API_KEY, GEMINI_MODEL);
+    else texto = await chamarClaude(prompt, ANTHROPIC_API_KEY, ANTHROPIC_MODEL);
   } catch (e) {
     console.error('Erro da IA:', e.status, e.detalhe);
     if (e.status === 429) return res.status(429).json({ code: 'rate_limited' });
@@ -42,6 +42,22 @@ module.exports = async function handler(req, res) {
     return res.status(502).json({ code: 'formato' });
   }
 };
+
+async function chamarGroq(prompt, chave, modelo) {
+  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + chave, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: modelo || 'openai/gpt-oss-120b',
+      messages: [{ role: 'system', content: SISTEMA }, { role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      max_tokens: 8000,
+    }),
+  });
+  if (!r.ok) throw { status: r.status, detalhe: (await r.text()).slice(0, 300) };
+  const d = await r.json();
+  return ((((d.choices || [])[0] || {}).message || {}).content) || '';
+}
 
 async function chamarGemini(prompt, chave, modelo) {
   const m = modelo || 'gemini-4-hydrogen';
